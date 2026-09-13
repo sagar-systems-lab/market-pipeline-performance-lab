@@ -17,6 +17,31 @@ struct PercentileSummary {
     double max_us{};
 };
 
+struct FeedFailoverSummary {
+    bool exercised{false};
+
+    std::uint64_t primary_outage_start_ms{};
+    std::uint64_t primary_outage_end_ms{};
+    std::uint64_t recovery_hold_ms{};
+
+    std::uint64_t raw_primary_observations{};
+    std::uint64_t raw_backup_observations{};
+    std::uint64_t forwarded_primary{};
+    std::uint64_t forwarded_backup{};
+    std::uint64_t suppressed_inactive_observations{};
+    std::uint64_t selection_gap_updates{};
+    std::uint64_t no_trusted_feed_updates{};
+
+    std::uint64_t feed_switches{};
+    std::uint64_t untrusted_transitions{};
+    std::uint64_t primary_stale_transitions{};
+    std::uint64_t primary_recoveries{};
+    std::uint64_t sequence_regressions{};
+
+    std::uint64_t failover_detection_us{};
+    std::uint64_t primary_restore_latency_us{};
+};
+
 struct BenchmarkOptions {
     std::chrono::milliseconds warmup{500};
     std::chrono::milliseconds measurement_override{0};
@@ -42,6 +67,7 @@ struct RunResult {
 
     PercentileSummary event_age{};
     PercentileSummary queue_residence{};
+    FeedFailoverSummary feed_failover{};
 };
 
 class BurstSchedule {
@@ -74,6 +100,12 @@ private:
 
 [[nodiscard]]
 RunResult run_benchmark(
+    const ScenarioConfig& config,
+    const BenchmarkOptions& options = {}
+);
+
+[[nodiscard]]
+RunResult run_feed_failover_benchmark(
     const ScenarioConfig& config,
     const BenchmarkOptions& options = {}
 );

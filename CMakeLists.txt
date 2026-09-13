@@ -62,6 +62,9 @@ add_library(
     src/queue.cpp
     src/benchmark.cpp
     src/report.cpp
+    src/feed_arbitration.cpp
+    src/failover_workload.cpp
+    src/feed_failover_benchmark.cpp
 )
 
 target_include_directories(
@@ -176,5 +179,45 @@ if(BUILD_TESTING)
     add_test(
         NAME silent_benchmark_contract
         COMMAND market_pipeline_benchmark_tests
+    )
+
+    add_executable(
+        market_pipeline_feed_arbitration_tests
+        tests/feed_arbitration_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_feed_arbitration_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_feed_arbitration_tests
+    )
+
+    add_test(
+        NAME feed_arbitration_contract
+        COMMAND market_pipeline_feed_arbitration_tests
+    )
+
+    add_executable(
+        market_pipeline_feed_failover_benchmark_tests
+        tests/feed_failover_benchmark_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_feed_failover_benchmark_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_feed_failover_benchmark_tests
+    )
+
+    add_test(
+        NAME feed_failover_benchmark_contract
+        COMMAND market_pipeline_feed_failover_benchmark_tests
     )
 endif()

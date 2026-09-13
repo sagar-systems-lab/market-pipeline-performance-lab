@@ -1,14 +1,16 @@
 #include "market_pipeline/benchmark.hpp"
 
 #include "market_pipeline/event.hpp"
+#include "market_pipeline/feed_arbitration.hpp"
+#include "market_pipeline/failover_workload.hpp"
 #include "market_pipeline/queue.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -26,7 +28,7 @@ struct PhaseCounters {
     std::atomic<std::uint64_t> blocked_waits{0};
 };
 
-struct PhaseResult {
+struct FailoverPhaseResult {
     double elapsed_seconds{};
     std::uint64_t generated{};
     std::uint64_t enqueued{};
@@ -37,6 +39,7 @@ struct PhaseResult {
     std::size_t peak_queue_depth{};
     std::vector<std::uint64_t> event_age_ns;
     std::vector<std::uint64_t> queue_residence_ns;
+    FeedFailoverSummary failover{};
 };
 
 PercentileSummary summarize(
@@ -107,7 +110,41 @@ PercentileSummary summarize(
     };
 }
 
-PhaseResult run_phase(
+std::uint64_t positive_microseconds(
+    const SteadyClock::duration value
+) {
+    const auto micros =
+        std::chrono::duration_cast<
+            std::chrono::microseconds
+        >(value).count();
+
+    if (micros <= 0) {
+        return 0;
+    }
+
+    return static_cast<std::uint64_t>(
+        micros
+    );
+}
+
+std::uint64_t nonnegative_milliseconds(
+    const std::chrono::nanoseconds value
+) {
+    const auto millis =
+        std::chrono::duration_cast<
+            std::chrono::milliseconds
+        >(value).count();
+
+    if (millis <= 0) {
+        return 0;
+    }
+
+    return static_cast<std::uint64_t>(
+        millis
+    );
+}
+
+FailoverPhaseResult run_failover_phase(
     const ScenarioConfig& config,
     const std::chrono::milliseconds duration,
     const std::uint64_t sample_stride,
@@ -124,6 +161,17 @@ PhaseResult run_phase(
             "sample stride must be positive"
         );
     }
+
+    const auto stale_threshold =
+        std::chrono::milliseconds{
+            config.stale_threshold_ms
+        };
+
+    const auto plan =
+        make_failover_plan(
+            duration,
+            stale_threshold
+        );
 
     BoundedEventQueue queue{
         config.queue_capacity,
@@ -217,22 +265,41 @@ PhaseResult run_phase(
         );
     }
 
+    FeedFailoverSummary failover{};
+
+    failover.exercised = true;
+    failover.primary_outage_start_ms =
+        nonnegative_milliseconds(
+            plan.primary_outage_start
+        );
+    failover.primary_outage_end_ms =
+        nonnegative_milliseconds(
+            plan.primary_outage_end
+        );
+
+    const auto recovery_hold_count =
+        plan.recovery_hold.count();
+
+    if (recovery_hold_count > 0) {
+        failover.recovery_hold_ms =
+            static_cast<std::uint64_t>(
+                recovery_hold_count
+            );
+    }
+
     BurstSchedule schedule{config};
 
     std::thread producer{
         [&] {
-            std::vector<std::uint64_t>
-                sequences(
-                    config.feed_count,
-                    0
-                );
+            FeedArbiter arbiter{
+                config.feed_count,
+                stale_threshold,
+                plan.recovery_hold,
+                0
+            };
 
-            std::size_t feed_cursor =
-                static_cast<std::size_t>(
-                    config.seed %
-                    config.feed_count
-                );
-
+            std::uint64_t primary_sequence = 0;
+            std::uint64_t backup_sequence = 0;
             long double credit = 0.0L;
 
             ready_threads.fetch_add(
@@ -262,6 +329,11 @@ PhaseResult run_phase(
                 const auto elapsed =
                     now - start_time;
 
+                const auto elapsed_ns =
+                    std::chrono::duration_cast<
+                        std::chrono::nanoseconds
+                    >(elapsed);
+
                 const long double delta_seconds =
                     std::chrono::duration<
                         long double
@@ -274,11 +346,7 @@ PhaseResult run_phase(
 
                 const auto target_rate =
                     schedule.target_rate_at(
-                        std::chrono::
-                            duration_cast<
-                                std::chrono::
-                                    nanoseconds
-                            >(elapsed)
+                        elapsed_ns
                     );
 
                 credit +=
@@ -288,9 +356,9 @@ PhaseResult run_phase(
                     delta_seconds;
 
                 auto due =
-                    static_cast<
-                        std::uint64_t
-                    >(credit);
+                    static_cast<std::uint64_t>(
+                        credit
+                    );
 
                 if (due == 0) {
                     std::this_thread::yield();
@@ -308,37 +376,166 @@ PhaseResult run_phase(
                         std::memory_order_relaxed
                     )
                 ) {
-                    MarketEvent event{};
-
-                    event.feed_id =
-                        static_cast<
-                            std::uint32_t
-                        >(feed_cursor);
-
-                    event.sequence =
-                        ++sequences[
-                            feed_cursor
-                        ];
-
-                    event.generated_at =
+                    const auto observation_time =
                         SteadyClock::now();
 
-                    feed_cursor =
-                        (
-                            feed_cursor +
-                            1
-                        ) %
-                        config.feed_count;
-
-                    counters.generated
-                        .fetch_add(
-                            1,
-                            std::memory_order_relaxed
+                    const auto logical_elapsed =
+                        std::chrono::duration_cast<
+                            std::chrono::nanoseconds
+                        >(
+                            observation_time -
+                            start_time
                         );
+
+                    counters.generated.fetch_add(
+                        1,
+                        std::memory_order_relaxed
+                    );
+
+                    const bool primary_observed =
+                        plan.primary_available(
+                            logical_elapsed
+                        );
+
+                    MarketEvent primary_event{};
+                    MarketEvent backup_event{};
+
+                    if (primary_observed) {
+                        primary_event.feed_id = 0;
+                        primary_event.sequence =
+                            ++primary_sequence;
+                        primary_event.generated_at =
+                            observation_time;
+
+                        static_cast<void>(
+                            arbiter.observe(
+                                0,
+                                primary_event.sequence,
+                                observation_time
+                            )
+                        );
+
+                        ++failover.
+                            raw_primary_observations;
+                    }
+
+                    backup_event.feed_id = 1;
+                    backup_event.sequence =
+                        ++backup_sequence;
+                    backup_event.generated_at =
+                        observation_time;
+
+                    static_cast<void>(
+                        arbiter.observe(
+                            1,
+                            backup_event.sequence,
+                            observation_time
+                        )
+                    );
+
+                    ++failover.raw_backup_observations;
+
+                    const auto arbitration =
+                        arbiter.snapshot(
+                            observation_time
+                        );
+
+                    MarketEvent selected_event{};
+                    bool forward = false;
+
+                    if (
+                        arbitration.active_feed &&
+                        *arbitration.active_feed == 0 &&
+                        primary_observed
+                    ) {
+                        selected_event =
+                            primary_event;
+                        forward = true;
+                        ++failover.forwarded_primary;
+
+                        if (
+                            failover.
+                                    failover_detection_us >
+                                0 &&
+                            failover.
+                                    primary_restore_latency_us ==
+                                0 &&
+                            logical_elapsed >=
+                                plan.primary_outage_end
+                        ) {
+                            failover.
+                                primary_restore_latency_us =
+                                positive_microseconds(
+                                    observation_time -
+                                    (
+                                        start_time +
+                                        plan.
+                                            primary_outage_end
+                                    )
+                                );
+                        }
+                    } else if (
+                        arbitration.active_feed &&
+                        *arbitration.active_feed == 1
+                    ) {
+                        selected_event =
+                            backup_event;
+                        forward = true;
+                        ++failover.forwarded_backup;
+
+                        if (
+                            failover.
+                                    failover_detection_us ==
+                                0 &&
+                            logical_elapsed >=
+                                plan.primary_outage_start
+                        ) {
+                            failover.
+                                failover_detection_us =
+                                positive_microseconds(
+                                    observation_time -
+                                    (
+                                        start_time +
+                                        plan.
+                                            primary_outage_start
+                                    )
+                                );
+                        }
+                    }
+
+                    const std::uint64_t
+                        observations_this_update =
+                            primary_observed
+                                ? 2U
+                                : 1U;
+
+                    if (forward) {
+                        failover.
+                            suppressed_inactive_observations +=
+                            observations_this_update -
+                            1U;
+                    } else {
+                        failover.
+                            suppressed_inactive_observations +=
+                            observations_this_update;
+
+                        ++failover.
+                            selection_gap_updates;
+
+                        if (
+                            !arbitration.active_feed
+                        ) {
+                            ++failover.
+                                no_trusted_feed_updates;
+                        }
+
+                        --due;
+                        continue;
+                    }
 
                     const auto outcome =
                         queue.push(
-                            event,
+                            selected_event,
                             stop_requested
                         );
 
@@ -347,35 +544,31 @@ PhaseResult run_phase(
                     }
 
                     if (outcome.enqueued) {
-                        counters.enqueued
-                            .fetch_add(
-                                1,
-                                std::memory_order_relaxed
-                            );
+                        counters.enqueued.fetch_add(
+                            1,
+                            std::memory_order_relaxed
+                        );
                     }
 
                     if (outcome.coalesced) {
-                        counters.coalesced
-                            .fetch_add(
-                                1,
-                                std::memory_order_relaxed
-                            );
+                        counters.coalesced.fetch_add(
+                            1,
+                            std::memory_order_relaxed
+                        );
                     }
 
                     if (outcome.dropped) {
-                        counters.dropped
-                            .fetch_add(
-                                1,
-                                std::memory_order_relaxed
-                            );
+                        counters.dropped.fetch_add(
+                            1,
+                            std::memory_order_relaxed
+                        );
                     }
 
                     if (outcome.blocked) {
-                        counters.blocked_waits
-                            .fetch_add(
-                                1,
-                                std::memory_order_relaxed
-                            );
+                        counters.blocked_waits.fetch_add(
+                            1,
+                            std::memory_order_relaxed
+                        );
 
                         credit = 0.0L;
                         last_budget_time =
@@ -387,6 +580,30 @@ PhaseResult run_phase(
                     --due;
                 }
             }
+
+            const auto final_snapshot =
+                arbiter.snapshot(
+                    SteadyClock::now()
+                );
+
+            failover.feed_switches =
+                final_snapshot.feed_switches;
+
+            failover.untrusted_transitions =
+                final_snapshot.
+                    untrusted_transitions;
+
+            failover.primary_stale_transitions =
+                final_snapshot.
+                    primary_stale_transitions;
+
+            failover.primary_recoveries =
+                final_snapshot.
+                    primary_recoveries;
+
+            failover.sequence_regressions =
+                final_snapshot.
+                    sequence_regressions;
         }
     };
 
@@ -435,9 +652,9 @@ PhaseResult run_phase(
                     delta_seconds;
 
                 auto due =
-                    static_cast<
-                        std::uint64_t
-                    >(credit);
+                    static_cast<std::uint64_t>(
+                        credit
+                    );
 
                 if (due == 0) {
                     std::this_thread::yield();
@@ -459,11 +676,7 @@ PhaseResult run_phase(
                 ) {
                     MarketEvent event{};
 
-                    if (
-                        !queue.try_pop(
-                            event
-                        )
-                    ) {
+                    if (!queue.try_pop(event)) {
                         queue_empty = true;
                         break;
                     }
@@ -471,14 +684,12 @@ PhaseResult run_phase(
                     const auto processed_at =
                         SteadyClock::now();
 
-                    const auto
-                        processed_count =
-                            counters.processed
-                                .fetch_add(
-                                    1,
-                                    std::memory_order_relaxed
-                                ) +
-                            1;
+                    const auto processed_count =
+                        counters.processed.fetch_add(
+                            1,
+                            std::memory_order_relaxed
+                        ) +
+                        1;
 
                     if (
                         collect_samples &&
@@ -489,24 +700,20 @@ PhaseResult run_phase(
                             sample_capacity
                     ) {
                         const auto age =
-                            std::chrono::
-                                duration_cast<
-                                    std::chrono::
-                                        nanoseconds
-                                >(
-                                    processed_at -
-                                    event.generated_at
-                                );
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds
+                            >(
+                                processed_at -
+                                event.generated_at
+                            );
 
                         const auto residence =
-                            std::chrono::
-                                duration_cast<
-                                    std::chrono::
-                                        nanoseconds
-                                >(
-                                    processed_at -
-                                    event.enqueued_at
-                                );
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds
+                            >(
+                                processed_at -
+                                event.enqueued_at
+                            );
 
                         if (
                             age.count() >= 0 &&
@@ -518,8 +725,8 @@ PhaseResult run_phase(
                                 >(age.count())
                             );
 
-                            queue_residence_ns
-                                .push_back(
+                            queue_residence_ns.
+                                push_back(
                                     static_cast<
                                         std::uint64_t
                                     >(
@@ -547,7 +754,8 @@ PhaseResult run_phase(
         std::this_thread::yield();
     }
 
-    start_time = SteadyClock::now();
+    start_time =
+        SteadyClock::now();
 
     start_requested.store(
         true,
@@ -575,10 +783,10 @@ PhaseResult run_phase(
     producer.join();
     consumer.join();
 
-    const auto snapshot =
+    const auto queue_snapshot =
         queue.snapshot();
 
-    return PhaseResult{
+    return FailoverPhaseResult{
         std::chrono::duration<double>(
             stop_time -
             start_time
@@ -601,210 +809,29 @@ PhaseResult run_phase(
         counters.blocked_waits.load(
             std::memory_order_relaxed
         ),
-        snapshot.peak_size,
+        queue_snapshot.peak_size,
         std::move(event_age_ns),
-        std::move(queue_residence_ns)
+        std::move(queue_residence_ns),
+        failover
     };
 }
 
 }  // namespace
 
-BurstSchedule::BurstSchedule(
-    const ScenarioConfig& config
-)
-    : base_rate_{
-          config.base_ingress_rate
-      },
-      multiplier_{
-          config.burst.multiplier
-      },
-      duration_ms_{
-          config.burst.duration_ms
-      },
-      runtime_share_pct_{
-          config.burst.runtime_share_pct
-      } {
-}
-
-bool BurstSchedule::active_at(
-    const std::chrono::nanoseconds elapsed
-) const noexcept {
-    if (
-        multiplier_ <= 1.0 ||
-        duration_ms_ == 0 ||
-        runtime_share_pct_ <= 0.0
-    ) {
-        return false;
-    }
-
-    if (runtime_share_pct_ >= 100.0) {
-        return true;
-    }
-
-    const long double share =
-        static_cast<long double>(
-            runtime_share_pct_
-        ) /
-        100.0L;
-
-    const long double cycle_ns =
-        static_cast<long double>(
-            duration_ms_
-        ) *
-        1'000'000.0L /
-        share;
-
-    const long double position =
-        std::fmod(
-            static_cast<long double>(
-                elapsed.count()
-            ),
-            cycle_ns
-        );
-
-    return
-        position <
-        static_cast<long double>(
-            duration_ms_
-        ) *
-            1'000'000.0L;
-}
-
-std::uint64_t BurstSchedule::target_rate_at(
-    const std::chrono::nanoseconds elapsed
-) const noexcept {
-    if (!active_at(elapsed)) {
-        return base_rate_;
-    }
-
-    const long double scaled =
-        static_cast<long double>(
-            base_rate_
-        ) *
-        static_cast<long double>(
-            multiplier_
-        );
-
-    const long double maximum =
-        static_cast<long double>(
-            std::numeric_limits<
-                std::uint64_t
-            >::max()
-        );
-
-    if (scaled >= maximum) {
-        return
-            std::numeric_limits<
-                std::uint64_t
-            >::max();
-    }
-
-    return static_cast<std::uint64_t>(
-        scaled
-    );
-}
-
-long double BurstSchedule::expected_events(
-    const std::chrono::nanoseconds elapsed
-) const noexcept {
-    const long double total_ns =
-        static_cast<long double>(
-            elapsed.count()
-        );
-
-    if (total_ns <= 0.0L) {
-        return 0.0L;
-    }
-
-    if (
-        multiplier_ <= 1.0 ||
-        duration_ms_ == 0 ||
-        runtime_share_pct_ <= 0.0
-    ) {
-        return
-            static_cast<long double>(
-                base_rate_
-            ) *
-            total_ns /
-            1'000'000'000.0L;
-    }
-
-    if (runtime_share_pct_ >= 100.0) {
-        return
-            static_cast<long double>(
-                base_rate_
-            ) *
-            static_cast<long double>(
-                multiplier_
-            ) *
-            total_ns /
-            1'000'000'000.0L;
-    }
-
-    const long double burst_ns =
-        static_cast<long double>(
-            duration_ms_
-        ) *
-        1'000'000.0L;
-
-    const long double share =
-        static_cast<long double>(
-            runtime_share_pct_
-        ) /
-        100.0L;
-
-    const long double cycle_ns =
-        burst_ns /
-        share;
-
-    const auto full_cycles =
-        static_cast<std::uint64_t>(
-            total_ns /
-            cycle_ns
-        );
-
-    const long double remainder_ns =
-        total_ns -
-        static_cast<long double>(
-            full_cycles
-        ) *
-            cycle_ns;
-
-    const long double total_burst_ns =
-        static_cast<long double>(
-            full_cycles
-        ) *
-            burst_ns +
-        std::min(
-            remainder_ns,
-            burst_ns
-        );
-
-    const long double normal_ns =
-        total_ns -
-        total_burst_ns;
-
-    const long double base =
-        static_cast<long double>(
-            base_rate_
-        );
-
-    return (
-        normal_ns *
-            base +
-        total_burst_ns *
-            base *
-            static_cast<long double>(
-                multiplier_
-            )
-    ) /
-        1'000'000'000.0L;
-}
-
-RunResult run_benchmark(
+RunResult run_feed_failover_benchmark(
     const ScenarioConfig& config,
     const BenchmarkOptions& options
 ) {
+    if (
+        config.mode !=
+        WorkloadMode::FeedFailover
+    ) {
+        throw std::invalid_argument(
+            "feed failover benchmark requires "
+            "FeedFailover mode"
+        );
+    }
+
     if (
         const auto error =
             validate_scenario(config);
@@ -822,19 +849,9 @@ RunResult run_benchmark(
         );
     }
 
-    if (
-        config.mode ==
-        WorkloadMode::FeedFailover
-    ) {
-        return run_feed_failover_benchmark(
-            config,
-            options
-        );
-    }
-
     if (options.warmup.count() > 0) {
         static_cast<void>(
-            run_phase(
+            run_failover_phase(
                 config,
                 options.warmup,
                 options.sample_stride,
@@ -856,7 +873,7 @@ RunResult run_benchmark(
               );
 
     auto phase =
-        run_phase(
+        run_failover_phase(
             config,
             measurement,
             options.sample_stride,
@@ -874,20 +891,18 @@ RunResult run_benchmark(
             }
         );
 
-    const long double
-        requested_events =
-            schedule.expected_events(
-                elapsed_ns
-            );
+    const long double requested_events =
+        schedule.expected_events(
+            elapsed_ns
+        );
 
-    const double
-        requested_average_rate =
-            phase.elapsed_seconds > 0.0
-                ? static_cast<double>(
-                      requested_events /
-                      phase.elapsed_seconds
-                  )
-                : 0.0;
+    const double requested_average_rate =
+        phase.elapsed_seconds > 0.0
+            ? static_cast<double>(
+                  requested_events /
+                  phase.elapsed_seconds
+              )
+            : 0.0;
 
     const double observed_ingress_rate =
         phase.elapsed_seconds > 0.0
@@ -897,14 +912,13 @@ RunResult run_benchmark(
                   phase.elapsed_seconds
             : 0.0;
 
-    const double
-        observed_processing_rate =
-            phase.elapsed_seconds > 0.0
-                ? static_cast<double>(
-                      phase.processed
-                  ) /
-                      phase.elapsed_seconds
-                : 0.0;
+    const double observed_processing_rate =
+        phase.elapsed_seconds > 0.0
+            ? static_cast<double>(
+                  phase.processed
+              ) /
+                  phase.elapsed_seconds
+            : 0.0;
 
     const double target_attainment_pct =
         requested_average_rate > 0.0
@@ -944,7 +958,8 @@ RunResult run_benchmark(
             std::move(
                 phase.queue_residence_ns
             )
-        )
+        ),
+        phase.failover
     };
 }
 
