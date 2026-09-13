@@ -19,6 +19,7 @@ enum class FeedTrustState {
 struct FeedObservation {
     bool accepted{false};
     bool sequence_regression{false};
+    bool timestamp_regression{false};
 };
 
 struct FeedArbitrationSnapshot {
@@ -29,6 +30,7 @@ struct FeedArbitrationSnapshot {
     std::uint64_t primary_stale_transitions{};
     std::uint64_t primary_recoveries{};
     std::uint64_t sequence_regressions{};
+    std::uint64_t timestamp_regressions{};
 };
 
 class FeedArbiter {
@@ -114,6 +116,7 @@ private:
     std::uint64_t primary_stale_transitions_{0};
     std::uint64_t primary_recoveries_{0};
     std::uint64_t sequence_regressions_{0};
+    std::uint64_t timestamp_regressions_{0};
 };
 
 }  // namespace market_pipeline

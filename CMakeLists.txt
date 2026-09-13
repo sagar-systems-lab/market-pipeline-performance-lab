@@ -16,6 +16,31 @@ option(
     OFF
 )
 
+option(
+    MPPL_ENABLE_SANITIZERS
+    "Enable AddressSanitizer and UndefinedBehaviorSanitizer"
+    OFF
+)
+
+if(MPPL_ENABLE_SANITIZERS)
+    if(MSVC)
+        message(
+            FATAL_ERROR
+            "MPPL_ENABLE_SANITIZERS is supported by GCC/Clang builds"
+        )
+    endif()
+
+    add_compile_options(
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+    )
+
+    add_link_options(
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+    )
+endif()
+
 function(mppl_enable_warnings target)
     if(MSVC)
         target_compile_options(
@@ -284,5 +309,25 @@ if(BUILD_TESTING)
     add_test(
         NAME pipeline_comparison_contract
         COMMAND market_pipeline_pipeline_comparison_tests
+    )
+
+    add_executable(
+        market_pipeline_hardening_tests
+        tests/hardening_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_hardening_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_hardening_tests
+    )
+
+    add_test(
+        NAME hostile_boundary_contract
+        COMMAND market_pipeline_hardening_tests
     )
 endif()

@@ -69,3 +69,5 @@ Testing/
 .cache/
 results/run-*.json
 results/run-*.csv
+results/comparison-*.json
+results/comparison-*.csv

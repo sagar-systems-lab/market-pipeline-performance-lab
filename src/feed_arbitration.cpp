@@ -135,15 +135,30 @@ FeedObservation FeedArbiter::observe(
 
     auto& feed = feeds_[feed_id];
 
-    if (
+    const bool sequence_regression =
         feed.seen &&
-        sequence <= feed.last_sequence
+        sequence <= feed.last_sequence;
+
+    const bool timestamp_regression =
+        feed.seen &&
+        now < feed.last_seen;
+
+    if (
+        sequence_regression ||
+        timestamp_regression
     ) {
-        ++sequence_regressions_;
+        if (sequence_regression) {
+            ++sequence_regressions_;
+        }
+
+        if (timestamp_regression) {
+            ++timestamp_regressions_;
+        }
 
         return FeedObservation{
             false,
-            true
+            sequence_regression,
+            timestamp_regression
         };
     }
 
@@ -280,7 +295,8 @@ FeedArbitrationSnapshot FeedArbiter::snapshot(
         untrusted_transitions_,
         primary_stale_transitions_,
         primary_recoveries_,
-        sequence_regressions_
+        sequence_regressions_,
+        timestamp_regressions_
     };
 }
 
