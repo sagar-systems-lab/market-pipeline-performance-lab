@@ -23,6 +23,7 @@ function(mppl_enable_warnings target)
             PRIVATE
                 /W4
                 /permissive-
+                /Zc:__cplusplus
         )
 
         if(MPPL_WARNINGS_AS_ERRORS)
@@ -58,6 +59,9 @@ add_library(
     src/version.cpp
     src/scenario.cpp
     src/cli.cpp
+    src/queue.cpp
+    src/benchmark.cpp
+    src/report.cpp
 )
 
 target_include_directories(
@@ -152,5 +156,25 @@ if(BUILD_TESTING)
     add_test(
         NAME interactive_cli_contract
         COMMAND market_pipeline_cli_tests
+    )
+
+    add_executable(
+        market_pipeline_benchmark_tests
+        tests/benchmark_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_benchmark_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_benchmark_tests
+    )
+
+    add_test(
+        NAME silent_benchmark_contract
+        COMMAND market_pipeline_benchmark_tests
     )
 endif()
