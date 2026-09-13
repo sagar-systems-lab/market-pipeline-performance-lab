@@ -824,6 +824,16 @@ RunResult run_benchmark(
 
     if (
         config.mode ==
+        WorkloadMode::SaturationSweep
+    ) {
+        return run_saturation_sweep_benchmark(
+            config,
+            options
+        );
+    }
+
+    if (
+        config.mode ==
         WorkloadMode::FeedFailover
     ) {
         return run_feed_failover_benchmark(

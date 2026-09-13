@@ -65,6 +65,7 @@ add_library(
     src/feed_arbitration.cpp
     src/failover_workload.cpp
     src/feed_failover_benchmark.cpp
+    src/saturation_sweep.cpp
 )
 
 target_include_directories(
@@ -219,5 +220,25 @@ if(BUILD_TESTING)
     add_test(
         NAME feed_failover_benchmark_contract
         COMMAND market_pipeline_feed_failover_benchmark_tests
+    )
+
+    add_executable(
+        market_pipeline_saturation_sweep_tests
+        tests/saturation_sweep_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_saturation_sweep_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_saturation_sweep_tests
+    )
+
+    add_test(
+        NAME saturation_sweep_contract
+        COMMAND market_pipeline_saturation_sweep_tests
     )
 endif()

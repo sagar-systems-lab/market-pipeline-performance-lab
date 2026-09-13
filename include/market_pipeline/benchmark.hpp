@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace market_pipeline {
 
@@ -42,6 +43,35 @@ struct FeedFailoverSummary {
     std::uint64_t primary_restore_latency_us{};
 };
 
+struct SaturationStepResult {
+    std::size_t step_index{};
+    std::uint64_t target_rate{};
+    double measurement_seconds{};
+    double observed_ingress_rate{};
+    double observed_processing_rate{};
+    double target_attainment_pct{};
+    bool generator_limited{};
+    bool producer_throttled_by_backpressure{};
+    bool pressure_observed{};
+
+    std::uint64_t generated{};
+    std::uint64_t processed{};
+    std::uint64_t dropped{};
+    std::uint64_t coalesced{};
+    std::uint64_t blocked_waits{};
+    std::size_t peak_queue_depth{};
+
+    PercentileSummary event_age{};
+    PercentileSummary queue_residence{};
+};
+
+struct SaturationSweepSummary {
+    bool exercised{false};
+    std::int64_t first_pressure_step{-1};
+    std::uint64_t first_pressure_target_rate{};
+    std::vector<SaturationStepResult> steps;
+};
+
 struct BenchmarkOptions {
     std::chrono::milliseconds warmup{500};
     std::chrono::milliseconds measurement_override{0};
@@ -68,6 +98,7 @@ struct RunResult {
     PercentileSummary event_age{};
     PercentileSummary queue_residence{};
     FeedFailoverSummary feed_failover{};
+    SaturationSweepSummary saturation_sweep{};
 };
 
 class BurstSchedule {
@@ -106,6 +137,12 @@ RunResult run_benchmark(
 
 [[nodiscard]]
 RunResult run_feed_failover_benchmark(
+    const ScenarioConfig& config,
+    const BenchmarkOptions& options = {}
+);
+
+[[nodiscard]]
+RunResult run_saturation_sweep_benchmark(
     const ScenarioConfig& config,
     const BenchmarkOptions& options = {}
 );
