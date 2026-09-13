@@ -1,5 +1,6 @@
 #include "market_pipeline/benchmark.hpp"
 
+#include "market_pipeline/deque_queue.hpp"
 #include "market_pipeline/event.hpp"
 #include "market_pipeline/queue.hpp"
 
@@ -107,7 +108,8 @@ PercentileSummary summarize(
     };
 }
 
-PhaseResult run_phase(
+template <typename Queue>
+PhaseResult run_phase_impl(
     const ScenarioConfig& config,
     const std::chrono::milliseconds duration,
     const std::uint64_t sample_stride,
@@ -125,7 +127,7 @@ PhaseResult run_phase(
         );
     }
 
-    BoundedEventQueue queue{
+    Queue queue{
         config.queue_capacity,
         config.high_watermark_pct,
         config.backpressure_policy
@@ -844,7 +846,7 @@ RunResult run_benchmark(
 
     if (options.warmup.count() > 0) {
         static_cast<void>(
-            run_phase(
+            run_phase_impl<BoundedEventQueue>(
                 config,
                 options.warmup,
                 options.sample_stride,
@@ -866,7 +868,7 @@ RunResult run_benchmark(
               );
 
     auto phase =
-        run_phase(
+        run_phase_impl<BoundedEventQueue>(
             config,
             measurement,
             options.sample_stride,
@@ -956,6 +958,184 @@ RunResult run_benchmark(
             )
         )
     };
+}
+
+
+RunResult run_benchmark_with_backend(
+    const ScenarioConfig& config,
+    const QueueBackend backend,
+    const BenchmarkOptions& options
+) {
+    if (
+        const auto error =
+            validate_scenario(config);
+        error.has_value()
+    ) {
+        throw std::invalid_argument(
+            "invalid scenario: " +
+            error.value()
+        );
+    }
+
+    if (options.sample_stride == 0) {
+        throw std::invalid_argument(
+            "sample stride must be positive"
+        );
+    }
+
+    const auto run_phase_for_backend =
+        [&](const std::chrono::milliseconds duration,
+            const bool collect_samples) {
+            switch (backend) {
+            case QueueBackend::DynamicDeque:
+                return
+                    run_phase_impl<
+                        DequeEventQueue
+                    >(
+                        config,
+                        duration,
+                        options.sample_stride,
+                        collect_samples
+                    );
+
+            case QueueBackend::PreallocatedRing:
+                return
+                    run_phase_impl<
+                        BoundedEventQueue
+                    >(
+                        config,
+                        duration,
+                        options.sample_stride,
+                        collect_samples
+                    );
+            }
+
+            throw std::invalid_argument(
+                "unknown queue backend"
+            );
+        };
+
+    if (options.warmup.count() > 0) {
+        static_cast<void>(
+            run_phase_for_backend(
+                options.warmup,
+                false
+            )
+        );
+    }
+
+    const auto measurement =
+        options.measurement_override.count() >
+                0
+            ? options.measurement_override
+            : std::chrono::duration_cast<
+                  std::chrono::milliseconds
+              >(
+                  std::chrono::seconds{
+                      config.run_duration_seconds
+                  }
+              );
+
+    auto phase =
+        run_phase_for_backend(
+            measurement,
+            true
+        );
+
+    BurstSchedule schedule{config};
+
+    const auto elapsed_ns =
+        std::chrono::duration_cast<
+            std::chrono::nanoseconds
+        >(
+            std::chrono::duration<double>{
+                phase.elapsed_seconds
+            }
+        );
+
+    const long double requested_events =
+        schedule.expected_events(
+            elapsed_ns
+        );
+
+    const double requested_average_rate =
+        phase.elapsed_seconds > 0.0
+            ? static_cast<double>(
+                  requested_events /
+                  phase.elapsed_seconds
+              )
+            : 0.0;
+
+    const double observed_ingress_rate =
+        phase.elapsed_seconds > 0.0
+            ? static_cast<double>(
+                  phase.generated
+              ) /
+                  phase.elapsed_seconds
+            : 0.0;
+
+    const double observed_processing_rate =
+        phase.elapsed_seconds > 0.0
+            ? static_cast<double>(
+                  phase.processed
+              ) /
+                  phase.elapsed_seconds
+            : 0.0;
+
+    const double target_attainment_pct =
+        requested_average_rate > 0.0
+            ? observed_ingress_rate *
+                  100.0 /
+                  requested_average_rate
+            : 0.0;
+
+    const bool producer_throttled =
+        phase.blocked_waits > 0;
+
+    const bool generator_limited =
+        !producer_throttled &&
+        target_attainment_pct < 95.0;
+
+    return RunResult{
+        phase.elapsed_seconds,
+        requested_average_rate,
+        observed_ingress_rate,
+        observed_processing_rate,
+        target_attainment_pct,
+        generator_limited,
+        producer_throttled,
+        phase.generated,
+        phase.enqueued,
+        phase.processed,
+        phase.dropped,
+        phase.coalesced,
+        phase.blocked_waits,
+        phase.peak_queue_depth,
+        summarize(
+            std::move(
+                phase.event_age_ns
+            )
+        ),
+        summarize(
+            std::move(
+                phase.queue_residence_ns
+            )
+        )
+    };
+}
+
+std::string_view to_string(
+    const QueueBackend backend
+) noexcept {
+    switch (backend) {
+    case QueueBackend::DynamicDeque:
+        return "dynamic_deque";
+
+    case QueueBackend::PreallocatedRing:
+        return "preallocated_ring";
+    }
+
+    return "unknown";
 }
 
 }  // namespace market_pipeline
