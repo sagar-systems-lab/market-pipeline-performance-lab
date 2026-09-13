@@ -166,7 +166,7 @@ ReportPaths write_reports(
     json
         << "{\n"
         << "  \"schema\": "
-           "\"market-pipeline-performance-lab.v1\",\n"
+           "\"market-pipeline-performance-lab.v2\",\n"
         << "  \"run_id\": \""
         << run_id
         << "\",\n"
@@ -283,7 +283,73 @@ ReportPaths write_reports(
     );
 
     json
-        << "  },\n"
+        << "  },\n";
+
+    if (result.feed_failover.exercised) {
+        const auto& failover =
+            result.feed_failover;
+
+        json
+            << "  \"feed_arbitration\": {\n"
+            << "    \"exercised\": true,\n"
+            << "    \"primary_outage_start_ms\": "
+            << failover.primary_outage_start_ms
+            << ",\n"
+            << "    \"primary_outage_end_ms\": "
+            << failover.primary_outage_end_ms
+            << ",\n"
+            << "    \"recovery_hold_ms\": "
+            << failover.recovery_hold_ms
+            << ",\n"
+            << "    \"raw_primary_observations\": "
+            << failover.raw_primary_observations
+            << ",\n"
+            << "    \"raw_backup_observations\": "
+            << failover.raw_backup_observations
+            << ",\n"
+            << "    \"forwarded_primary\": "
+            << failover.forwarded_primary
+            << ",\n"
+            << "    \"forwarded_backup\": "
+            << failover.forwarded_backup
+            << ",\n"
+            << "    \"suppressed_inactive_observations\": "
+            << failover.suppressed_inactive_observations
+            << ",\n"
+            << "    \"selection_gap_updates\": "
+            << failover.selection_gap_updates
+            << ",\n"
+            << "    \"no_trusted_feed_updates\": "
+            << failover.no_trusted_feed_updates
+            << ",\n"
+            << "    \"feed_switches\": "
+            << failover.feed_switches
+            << ",\n"
+            << "    \"untrusted_transitions\": "
+            << failover.untrusted_transitions
+            << ",\n"
+            << "    \"primary_stale_transitions\": "
+            << failover.primary_stale_transitions
+            << ",\n"
+            << "    \"primary_recoveries\": "
+            << failover.primary_recoveries
+            << ",\n"
+            << "    \"sequence_regressions\": "
+            << failover.sequence_regressions
+            << ",\n"
+            << "    \"failover_detection_us\": "
+            << failover.failover_detection_us
+            << ",\n"
+            << "    \"primary_restore_latency_us\": "
+            << failover.primary_restore_latency_us
+            << "\n"
+            << "  },\n";
+    } else {
+        json
+            << "  \"feed_arbitration\": null,\n";
+    }
+
+    json
         << "  \"environment\": {\n"
         << "    \"os\": \""
         << os_name()
@@ -347,7 +413,25 @@ ReportPaths write_reports(
            "queue_residence_p95_us,"
            "queue_residence_p99_us,"
            "queue_residence_p999_us,"
-           "queue_residence_max_us\n";
+           "queue_residence_max_us,"
+           "failover_exercised,"
+           "primary_outage_start_ms,"
+           "primary_outage_end_ms,"
+           "recovery_hold_ms,"
+           "raw_primary_observations,"
+           "raw_backup_observations,"
+           "forwarded_primary,"
+           "forwarded_backup,"
+           "suppressed_inactive_observations,"
+           "selection_gap_updates,"
+           "no_trusted_feed_updates,"
+           "feed_switches,"
+           "untrusted_transitions,"
+           "primary_stale_transitions,"
+           "primary_recoveries,"
+           "sequence_regressions,"
+           "failover_detection_us,"
+           "primary_restore_latency_us\n";
 
     csv
         << run_id
@@ -408,6 +492,46 @@ ReportPaths write_reports(
         << result.queue_residence.p999_us
         << ','
         << result.queue_residence.max_us
+        << ','
+        << (
+            result.feed_failover.exercised
+                ? 1
+                : 0
+        )
+        << ','
+        << result.feed_failover.primary_outage_start_ms
+        << ','
+        << result.feed_failover.primary_outage_end_ms
+        << ','
+        << result.feed_failover.recovery_hold_ms
+        << ','
+        << result.feed_failover.raw_primary_observations
+        << ','
+        << result.feed_failover.raw_backup_observations
+        << ','
+        << result.feed_failover.forwarded_primary
+        << ','
+        << result.feed_failover.forwarded_backup
+        << ','
+        << result.feed_failover.suppressed_inactive_observations
+        << ','
+        << result.feed_failover.selection_gap_updates
+        << ','
+        << result.feed_failover.no_trusted_feed_updates
+        << ','
+        << result.feed_failover.feed_switches
+        << ','
+        << result.feed_failover.untrusted_transitions
+        << ','
+        << result.feed_failover.primary_stale_transitions
+        << ','
+        << result.feed_failover.primary_recoveries
+        << ','
+        << result.feed_failover.sequence_regressions
+        << ','
+        << result.feed_failover.failover_detection_us
+        << ','
+        << result.feed_failover.primary_restore_latency_us
         << '\n';
 
     csv.close();
