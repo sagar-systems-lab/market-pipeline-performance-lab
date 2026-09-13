@@ -66,6 +66,9 @@ add_library(
     src/failover_workload.cpp
     src/feed_failover_benchmark.cpp
     src/saturation_sweep.cpp
+    src/deque_queue.cpp
+    src/pipeline_comparison.cpp
+    src/comparison_report.cpp
 )
 
 target_include_directories(
@@ -97,6 +100,27 @@ target_link_libraries(
 
 mppl_enable_warnings(
     market_pipeline_lab
+)
+
+add_executable(
+    market_pipeline_compare
+    src/compare_main.cpp
+)
+
+set_target_properties(
+    market_pipeline_compare
+    PROPERTIES
+        OUTPUT_NAME "market-pipeline-compare"
+)
+
+target_link_libraries(
+    market_pipeline_compare
+    PRIVATE
+        market_pipeline_core
+)
+
+mppl_enable_warnings(
+    market_pipeline_compare
 )
 
 include(CTest)
@@ -240,5 +264,25 @@ if(BUILD_TESTING)
     add_test(
         NAME saturation_sweep_contract
         COMMAND market_pipeline_saturation_sweep_tests
+    )
+
+    add_executable(
+        market_pipeline_pipeline_comparison_tests
+        tests/pipeline_comparison_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_pipeline_comparison_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_pipeline_comparison_tests
+    )
+
+    add_test(
+        NAME pipeline_comparison_contract
+        COMMAND market_pipeline_pipeline_comparison_tests
     )
 endif()

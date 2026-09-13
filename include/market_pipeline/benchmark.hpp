@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace market_pipeline {
@@ -78,6 +79,11 @@ struct BenchmarkOptions {
     std::uint64_t sample_stride{64};
 };
 
+enum class QueueBackend {
+    DynamicDeque,
+    PreallocatedRing
+};
+
 struct RunResult {
     double measurement_seconds{};
     double requested_average_ingress_rate{};
@@ -134,6 +140,18 @@ RunResult run_benchmark(
     const ScenarioConfig& config,
     const BenchmarkOptions& options = {}
 );
+
+[[nodiscard]]
+RunResult run_benchmark_with_backend(
+    const ScenarioConfig& config,
+    QueueBackend backend,
+    const BenchmarkOptions& options = {}
+);
+
+[[nodiscard]]
+std::string_view to_string(
+    QueueBackend backend
+) noexcept;
 
 [[nodiscard]]
 RunResult run_feed_failover_benchmark(
