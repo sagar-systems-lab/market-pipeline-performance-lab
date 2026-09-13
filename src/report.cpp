@@ -349,6 +349,139 @@ ReportPaths write_reports(
             << "  \"feed_arbitration\": null,\n";
     }
 
+    if (result.saturation_sweep.exercised) {
+        const auto& sweep =
+            result.saturation_sweep;
+
+        json
+            << "  \"saturation_sweep\": {\n"
+            << "    \"exercised\": true,\n"
+            << "    \"first_pressure_step\": "
+            << sweep.first_pressure_step
+            << ",\n"
+            << "    \"first_pressure_target_rate\": "
+            << sweep.first_pressure_target_rate
+            << ",\n"
+            << "    \"steps\": [\n";
+
+        for (
+            std::size_t index = 0;
+            index < sweep.steps.size();
+            ++index
+        ) {
+            const auto& step =
+                sweep.steps[index];
+
+            json
+                << "      {\n"
+                << "        \"step_index\": "
+                << step.step_index
+                << ",\n"
+                << "        \"target_rate\": "
+                << step.target_rate
+                << ",\n"
+                << "        \"measurement_seconds\": "
+                << step.measurement_seconds
+                << ",\n"
+                << "        \"observed_ingress_rate\": "
+                << step.observed_ingress_rate
+                << ",\n"
+                << "        \"observed_processing_rate\": "
+                << step.observed_processing_rate
+                << ",\n"
+                << "        \"target_attainment_pct\": "
+                << step.target_attainment_pct
+                << ",\n"
+                << "        \"generator_limited\": "
+                << (
+                    step.generator_limited
+                        ? "true"
+                        : "false"
+                )
+                << ",\n"
+                << "        \"producer_throttled_by_backpressure\": "
+                << (
+                    step.
+                        producer_throttled_by_backpressure
+                        ? "true"
+                        : "false"
+                )
+                << ",\n"
+                << "        \"pressure_observed\": "
+                << (
+                    step.pressure_observed
+                        ? "true"
+                        : "false"
+                )
+                << ",\n"
+                << "        \"generated\": "
+                << step.generated
+                << ",\n"
+                << "        \"processed\": "
+                << step.processed
+                << ",\n"
+                << "        \"dropped\": "
+                << step.dropped
+                << ",\n"
+                << "        \"coalesced\": "
+                << step.coalesced
+                << ",\n"
+                << "        \"blocked_waits\": "
+                << step.blocked_waits
+                << ",\n"
+                << "        \"peak_queue_depth\": "
+                << step.peak_queue_depth
+                << ",\n"
+                << "        \"event_age_p50_us\": "
+                << step.event_age.p50_us
+                << ",\n"
+                << "        \"event_age_p95_us\": "
+                << step.event_age.p95_us
+                << ",\n"
+                << "        \"event_age_p99_us\": "
+                << step.event_age.p99_us
+                << ",\n"
+                << "        \"event_age_p99_9_us\": "
+                << step.event_age.p999_us
+                << ",\n"
+                << "        \"event_age_max_us\": "
+                << step.event_age.max_us
+                << ",\n"
+                << "        \"queue_residence_p50_us\": "
+                << step.queue_residence.p50_us
+                << ",\n"
+                << "        \"queue_residence_p95_us\": "
+                << step.queue_residence.p95_us
+                << ",\n"
+                << "        \"queue_residence_p99_us\": "
+                << step.queue_residence.p99_us
+                << ",\n"
+                << "        \"queue_residence_p99_9_us\": "
+                << step.queue_residence.p999_us
+                << ",\n"
+                << "        \"queue_residence_max_us\": "
+                << step.queue_residence.max_us
+                << "\n"
+                << "      }";
+
+            if (
+                index + 1 <
+                sweep.steps.size()
+            ) {
+                json << ',';
+            }
+
+            json << '\n';
+        }
+
+        json
+            << "    ]\n"
+            << "  },\n";
+    } else {
+        json
+            << "  \"saturation_sweep\": null,\n";
+    }
+
     json
         << "  \"environment\": {\n"
         << "    \"os\": \""
@@ -387,6 +520,121 @@ ReportPaths write_reports(
         throw std::runtime_error(
             "unable to open CSV report"
         );
+    }
+
+    csv
+        << std::fixed
+        << std::setprecision(3);
+
+    if (result.saturation_sweep.exercised) {
+        csv
+            << "run_id,step_index,target_rate,"
+               "measurement_seconds,"
+               "observed_ingress_rate,"
+               "observed_processing_rate,"
+               "target_attainment_pct,"
+               "generator_limited,"
+               "producer_throttled_by_backpressure,"
+               "pressure_observed,"
+               "generated,processed,dropped,"
+               "coalesced,blocked_waits,"
+               "peak_queue_depth,"
+               "event_age_p50_us,"
+               "event_age_p95_us,"
+               "event_age_p99_us,"
+               "event_age_p999_us,"
+               "event_age_max_us,"
+               "queue_residence_p50_us,"
+               "queue_residence_p95_us,"
+               "queue_residence_p99_us,"
+               "queue_residence_p999_us,"
+               "queue_residence_max_us\n";
+
+        for (
+            const auto& step :
+            result.saturation_sweep.steps
+        ) {
+            csv
+                << run_id
+                << ','
+                << step.step_index
+                << ','
+                << step.target_rate
+                << ','
+                << step.measurement_seconds
+                << ','
+                << step.observed_ingress_rate
+                << ','
+                << step.observed_processing_rate
+                << ','
+                << step.target_attainment_pct
+                << ','
+                << (
+                    step.generator_limited
+                        ? 1
+                        : 0
+                )
+                << ','
+                << (
+                    step.
+                        producer_throttled_by_backpressure
+                        ? 1
+                        : 0
+                )
+                << ','
+                << (
+                    step.pressure_observed
+                        ? 1
+                        : 0
+                )
+                << ','
+                << step.generated
+                << ','
+                << step.processed
+                << ','
+                << step.dropped
+                << ','
+                << step.coalesced
+                << ','
+                << step.blocked_waits
+                << ','
+                << step.peak_queue_depth
+                << ','
+                << step.event_age.p50_us
+                << ','
+                << step.event_age.p95_us
+                << ','
+                << step.event_age.p99_us
+                << ','
+                << step.event_age.p999_us
+                << ','
+                << step.event_age.max_us
+                << ','
+                << step.queue_residence.p50_us
+                << ','
+                << step.queue_residence.p95_us
+                << ','
+                << step.queue_residence.p99_us
+                << ','
+                << step.queue_residence.p999_us
+                << ','
+                << step.queue_residence.max_us
+                << '\n';
+        }
+
+        csv.close();
+
+        if (!csv) {
+            throw std::runtime_error(
+                "failed while writing saturation CSV report"
+            );
+        }
+
+        return ReportPaths{
+            run_id,
+            json_path,
+            csv_path
+        };
     }
 
     csv
