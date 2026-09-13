@@ -18,10 +18,19 @@ option(
 
 function(mppl_enable_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        target_compile_options(
+            ${target}
+            PRIVATE
+                /W4
+                /permissive-
+        )
 
         if(MPPL_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE /WX)
+            target_compile_options(
+                ${target}
+                PRIVATE
+                    /WX
+            )
         endif()
     else()
         target_compile_options(
@@ -35,7 +44,11 @@ function(mppl_enable_warnings target)
         )
 
         if(MPPL_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE -Werror)
+            target_compile_options(
+                ${target}
+                PRIVATE
+                    -Werror
+            )
         endif()
     endif()
 endfunction()
@@ -43,6 +56,8 @@ endfunction()
 add_library(
     market_pipeline_core
     src/version.cpp
+    src/scenario.cpp
+    src/cli.cpp
 )
 
 target_include_directories(
@@ -51,7 +66,9 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/include
 )
 
-mppl_enable_warnings(market_pipeline_core)
+mppl_enable_warnings(
+    market_pipeline_core
+)
 
 add_executable(
     market_pipeline_lab
@@ -70,7 +87,9 @@ target_link_libraries(
         market_pipeline_core
 )
 
-mppl_enable_warnings(market_pipeline_lab)
+mppl_enable_warnings(
+    market_pipeline_lab
+)
 
 include(CTest)
 
@@ -86,10 +105,52 @@ if(BUILD_TESTING)
             market_pipeline_core
     )
 
-    mppl_enable_warnings(market_pipeline_smoke_tests)
+    mppl_enable_warnings(
+        market_pipeline_smoke_tests
+    )
 
     add_test(
         NAME project_smoke
         COMMAND market_pipeline_smoke_tests
+    )
+
+    add_executable(
+        market_pipeline_scenario_tests
+        tests/scenario_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_scenario_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_scenario_tests
+    )
+
+    add_test(
+        NAME scenario_contract
+        COMMAND market_pipeline_scenario_tests
+    )
+
+    add_executable(
+        market_pipeline_cli_tests
+        tests/cli_test.cpp
+    )
+
+    target_link_libraries(
+        market_pipeline_cli_tests
+        PRIVATE
+            market_pipeline_core
+    )
+
+    mppl_enable_warnings(
+        market_pipeline_cli_tests
+    )
+
+    add_test(
+        NAME interactive_cli_contract
+        COMMAND market_pipeline_cli_tests
     )
 endif()
